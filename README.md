@@ -80,6 +80,10 @@ cargo build --release \
 Features are `portal`, `drm`, `fbdev`; all are on by default and each can be
 dropped independently.
 
+Formatting and lint settings are checked in (`rustfmt.toml`, `clippy.toml`, and
+`[lints]` in `Cargo.toml`), so `cargo fmt` and `cargo clippy` need no flags. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Adding a backend
 
 1. Write `src/backend/<name>.rs` exposing `pub fn probe() -> Probe`.

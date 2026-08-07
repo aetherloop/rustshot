@@ -1,0 +1,9 @@
+# Stock rustfmt. Pinned explicitly so the output does not drift when the
+# defaults change under a newer toolchain — `style_edition` is what actually
+# freezes the formatting rules; the rest are the defaults written down.
+style_edition = "2021"
+
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

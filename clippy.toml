@@ -1,0 +1,30 @@
+# Knobs for the lints enabled in Cargo.toml's [lints.clippy].
+# Lint *levels* live in Cargo.toml; only tuning belongs here.
+
+# Kernel and spec names that are not Rust items, so `doc_markdown` should not
+# demand backticks around them.
+# `".."` keeps clippy's built-in list and appends to it.
+doc-valid-idents = [
+    "CRTC",
+    "DRM",
+    "GEM",
+    "KMS",
+    "RGBA",
+    "dma-buf",
+    "ioctl",
+    "mmap",
+    # DRM ioctl and pixel-format constants, spelled as the kernel headers do.
+    "ABGR8888",
+    "ARGB8888",
+    "DRM_FORMAT_XBGR8888",
+    "DRM_FORMAT_XRGB8888",
+    "GETFB2",
+    "MAP_DUMB",
+    "PRIME_HANDLE_TO_FD",
+    "..",
+]
+
+# Tests may unwrap/expect freely; a panic there is the failure report.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
