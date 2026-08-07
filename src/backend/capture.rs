@@ -121,7 +121,54 @@ impl Image {
                 }
             }
         }
-        Ok(Image { width, height, rgba })
+        Ok(Image {
+            width,
+            height,
+            rgba,
+        })
+    }
+}
+
+pub enum Capture {
+    /// The backend already produced an encoded file (the portal writes its
+    /// own PNG). Kept distinct so we move it instead of decoding and
+    /// re-encoding it for nothing.
+    EncodedFile(PathBuf),
+    Pixels(Image),
+}
+
+impl Capture {
+    pub fn save(self, dest: &Path) -> Result<(), Error> {
+        match self {
+            Capture::EncodedFile(src) => {
+                // rename() fails across filesystems; the portal's directory is
+                // often on a different mount than the target. rename() replaces
+                // a symlink at `dest` rather than following it, so it is safe;
+                // the copy fallback is not, hence the O_NOFOLLOW open below.
+                if std::fs::rename(&src, dest).is_err() {
+                    let mut from = File::open(&src)?;
+                    let mut to = create_no_follow(dest)?;
+                    std::io::copy(&mut from, &mut to)?;
+                    let _ = std::fs::remove_file(&src);
+                }
+                Ok(())
+            }
+            Capture::Pixels(img) => {
+                // image::save_buffer opens the path itself with O_CREAT|O_TRUNC
+                // and would follow a symlinked dest, so encode into a handle we
+                // opened with O_NOFOLLOW instead.
+                let file = create_no_follow(dest)?;
+                let encoder = image::codecs::png::PngEncoder::new(file);
+                image::ImageEncoder::write_image(
+                    encoder,
+                    &img.rgba,
+                    img.width,
+                    img.height,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| Error::Other(format!("encoding PNG: {e}")))
+            }
+        }
     }
 }
 
@@ -214,48 +261,5 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-}
-
-pub enum Capture {
-    /// The backend already produced an encoded file (the portal writes its
-    /// own PNG). Kept distinct so we move it instead of decoding and
-    /// re-encoding it for nothing.
-    EncodedFile(PathBuf),
-    Pixels(Image),
-}
-
-impl Capture {
-    pub fn save(self, dest: &Path) -> Result<(), Error> {
-        match self {
-            Capture::EncodedFile(src) => {
-                // rename() fails across filesystems; the portal's directory is
-                // often on a different mount than the target. rename() replaces
-                // a symlink at `dest` rather than following it, so it is safe;
-                // the copy fallback is not, hence the O_NOFOLLOW open below.
-                if std::fs::rename(&src, dest).is_err() {
-                    let mut from = File::open(&src)?;
-                    let mut to = create_no_follow(dest)?;
-                    std::io::copy(&mut from, &mut to)?;
-                    let _ = std::fs::remove_file(&src);
-                }
-                Ok(())
-            }
-            Capture::Pixels(img) => {
-                // image::save_buffer opens the path itself with O_CREAT|O_TRUNC
-                // and would follow a symlinked dest, so encode into a handle we
-                // opened with O_NOFOLLOW instead.
-                let file = create_no_follow(dest)?;
-                let encoder = image::codecs::png::PngEncoder::new(file);
-                image::ImageEncoder::write_image(
-                    encoder,
-                    &img.rgba,
-                    img.width,
-                    img.height,
-                    image::ExtendedColorType::Rgba8,
-                )
-                .map_err(|e| Error::Other(format!("encoding PNG: {e}")))
-            }
-        }
     }
 }

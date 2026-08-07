@@ -66,17 +66,8 @@ New kernel constants and spec names that appear in doc comments go in
 `doc-valid-idents` in `clippy.toml` rather than getting backticked, when they
 read better bare.
 
-## Known state
-
-The tree is not yet clean under these settings — adopting them is what surfaced
-the backlog. As of this writing `cargo clippy --all-targets --all-features`
-reports 18 warnings (`unnested_or_patterns` ×5, `unsafe_op_in_unsafe_fn` ×3,
-`ref_as_ptr` ×2, `cast_lossless` ×2, and six singletons), and `cargo fmt --all`
-rewrites 17 hunks, almost all of them compact struct literals being split
-across lines.
-
-Both are mechanical. Clean them in their own commit rather than folding them
-into a feature branch, so the reformat does not bury the change under review.
+The tree is clean under these settings on both feature sets. Keep it that way:
+a warning that survives a merge is one nobody reads afterwards.
 
 ## Unsafe code
 

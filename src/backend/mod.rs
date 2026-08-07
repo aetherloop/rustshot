@@ -90,9 +90,8 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Cancelled => write!(f, "capture cancelled"),
-            Error::Unsupported(m) => write!(f, "{m}"),
             Error::Io(e) => write!(f, "{e}"),
-            Error::Other(m) => write!(f, "{m}"),
+            Error::Unsupported(m) | Error::Other(m) => write!(f, "{m}"),
         }
     }
 }
@@ -113,14 +112,23 @@ pub struct Entry {
 /// Priority order — see module docs before reordering.
 pub const REGISTRY: &[Entry] = &[
     #[cfg(feature = "portal")]
-    Entry { name: "portal", probe: portal::probe },
+    Entry {
+        name: "portal",
+        probe: portal::probe,
+    },
     // Slots for wlr-screencopy and X11 GetImage go here: after the portal,
     // before DRM. Both are compositor-cooperative and work unprivileged,
     // so they should win over reading scanout memory directly.
     #[cfg(feature = "drm")]
-    Entry { name: "drm", probe: drm::probe },
+    Entry {
+        name: "drm",
+        probe: drm::probe,
+    },
     #[cfg(feature = "fbdev")]
-    Entry { name: "fbdev", probe: fbdev::probe },
+    Entry {
+        name: "fbdev",
+        probe: fbdev::probe,
+    },
 ];
 
 /// Walk the registry in order and return the first backend that accepts.
@@ -137,13 +145,13 @@ pub fn detect() -> Result<Box<dyn Backend>, Vec<(&'static str, String)>> {
 }
 
 pub fn detect_named(name: &str) -> Result<Box<dyn Backend>, String> {
-    let entry = REGISTRY
-        .iter()
-        .find(|e| e.name == name)
-        .ok_or_else(|| {
-            let known: Vec<_> = REGISTRY.iter().map(|e| e.name).collect();
-            format!("unknown backend \"{name}\" (built with: {})", known.join(", "))
-        })?;
+    let entry = REGISTRY.iter().find(|e| e.name == name).ok_or_else(|| {
+        let known: Vec<_> = REGISTRY.iter().map(|e| e.name).collect();
+        format!(
+            "unknown backend \"{name}\" (built with: {})",
+            known.join(", ")
+        )
+    })?;
     match (entry.probe)() {
         Probe::Ready(b) => Ok(b),
         Probe::Unavailable(reason) => Err(format!("backend \"{name}\" unavailable: {reason}")),
