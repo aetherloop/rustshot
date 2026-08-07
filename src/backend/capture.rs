@@ -7,9 +7,25 @@
 //! a backend is added.
 #![allow(dead_code)]
 
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use super::Error;
+
+/// Open `dest` for writing, refusing to follow a symlink at the final
+/// component. A regular file is still created or truncated as before, but a
+/// planted symlink is rejected (`ELOOP`) rather than silently redirecting the
+/// write to whatever it points at — which matters when rustshot runs more
+/// privileged than whoever can create the output path.
+fn create_no_follow(dest: &Path) -> Result<File, Error> {
+    Ok(OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dest)?)
+}
 
 /// Byte layout of a source buffer, as it sits in memory (little-endian hosts).
 /// DRM fourccs and fbdev bitfields both get normalised into one of these.
@@ -170,6 +186,35 @@ mod tests {
         let src = vec![0u8; 64];
         assert!(Image::from_raw(&src, 4, 2, 8, SourceFormat::Bgrx8888).is_err());
     }
+
+    /// A symlink planted at the destination must not be followed: the write is
+    /// refused rather than redirected through the link to the victim file.
+    #[test]
+    fn refuses_to_write_through_symlink() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustshot-symtest-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"do not touch").unwrap();
+        let dest = dir.join("shot.png");
+        std::os::unix::fs::symlink(&victim, &dest).unwrap();
+
+        let img = Image::from_raw(&[1, 2, 3, 0], 1, 1, 4, SourceFormat::Rgbx8888).unwrap();
+        let err = Capture::Pixels(img).save(&dest);
+
+        assert!(err.is_err(), "writing through a symlink should be refused");
+        assert_eq!(
+            std::fs::read(&victim).unwrap(),
+            b"do not touch",
+            "victim must be untouched"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 pub enum Capture {
@@ -185,20 +230,29 @@ impl Capture {
         match self {
             Capture::EncodedFile(src) => {
                 // rename() fails across filesystems; the portal's directory is
-                // often on a different mount than the target.
+                // often on a different mount than the target. rename() replaces
+                // a symlink at `dest` rather than following it, so it is safe;
+                // the copy fallback is not, hence the O_NOFOLLOW open below.
                 if std::fs::rename(&src, dest).is_err() {
-                    std::fs::copy(&src, dest)?;
+                    let mut from = File::open(&src)?;
+                    let mut to = create_no_follow(dest)?;
+                    std::io::copy(&mut from, &mut to)?;
                     let _ = std::fs::remove_file(&src);
                 }
                 Ok(())
             }
             Capture::Pixels(img) => {
-                image::save_buffer(
-                    dest,
+                // image::save_buffer opens the path itself with O_CREAT|O_TRUNC
+                // and would follow a symlinked dest, so encode into a handle we
+                // opened with O_NOFOLLOW instead.
+                let file = create_no_follow(dest)?;
+                let encoder = image::codecs::png::PngEncoder::new(file);
+                image::ImageEncoder::write_image(
+                    encoder,
                     &img.rgba,
                     img.width,
                     img.height,
-                    image::ColorType::Rgba8,
+                    image::ExtendedColorType::Rgba8,
                 )
                 .map_err(|e| Error::Other(format!("encoding PNG: {e}")))
             }
