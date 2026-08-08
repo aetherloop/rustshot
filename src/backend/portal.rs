@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
-use super::{Backend, Capture, Caps, Error, Probe, Request};
+use super::{Backend, Caps, Capture, Error, Probe, Request};
 
 const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 const OBJECT: &str = "/org/freedesktop/portal/desktop";

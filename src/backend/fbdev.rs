@@ -10,7 +10,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
 
 use super::capture::SourceFormat;
-use super::{Backend, Capture, Caps, Error, Image, Probe, Request};
+use super::{Backend, Caps, Capture, Error, Image, Probe, Request};
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
@@ -77,8 +77,12 @@ struct FixScreenInfo {
     reserved: [u16; 2],
 }
 
+/// # Safety
+/// `arg` must point at the struct type the kernel associates with `request`.
 unsafe fn ioctl<T>(fd: RawFd, request: libc::c_ulong, arg: &mut T) -> std::io::Result<()> {
-    if libc::ioctl(fd, request as _, arg as *mut T) == 0 {
+    // SAFETY: `arg` is a live `&mut T` for the whole call, and the caller
+    // guarantees `T` is the struct `request` expects.
+    if unsafe { libc::ioctl(fd, request as _, std::ptr::from_mut::<T>(arg)) } == 0 {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
@@ -118,8 +122,8 @@ pub fn probe() -> Probe {
     }
 
     let format = match (var.bits_per_pixel, var.red.offset) {
-        (32, 16) | (24, 16) => SourceFormat::Bgrx8888,
-        (32, 0) | (24, 0) => SourceFormat::Rgbx8888,
+        (32 | 24, 16) => SourceFormat::Bgrx8888,
+        (32 | 24, 0) => SourceFormat::Rgbx8888,
         (16, _) => SourceFormat::Rgb565,
         (bpp, _) => return Probe::unavailable(format!("unhandled {bpp} bits per pixel")),
     };

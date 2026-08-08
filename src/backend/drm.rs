@@ -21,7 +21,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
 
 use super::capture::SourceFormat;
-use super::{Backend, Capture, Caps, Error, Image, Probe, Request};
+use super::{Backend, Caps, Capture, Error, Image, Probe, Request};
 
 mod ffi {
     #![allow(non_camel_case_types)]
@@ -188,21 +188,28 @@ mod ffi {
 unsafe fn ioctl<T>(fd: RawFd, request: libc::c_ulong, arg: &mut T) -> std::io::Result<()> {
     // DRM retries on signals; EINTR/EAGAIN here are transient, not failures.
     loop {
-        let r = libc::ioctl(fd, request as _, arg as *mut T);
+        // SAFETY: `arg` is a live `&mut T` for the whole call, and the caller
+        // guarantees `T` is the struct `request` expects.
+        let r = unsafe { libc::ioctl(fd, request as _, std::ptr::from_mut::<T>(arg)) };
         if r == 0 {
             return Ok(());
         }
         let e = std::io::Error::last_os_error();
         match e.raw_os_error() {
-            Some(libc::EINTR) | Some(libc::EAGAIN) => continue,
+            Some(libc::EINTR | libc::EAGAIN) => {}
             _ => return Err(e),
         }
     }
 }
 
 /// For ioctls that carry no argument (`DRM_IO(...)`).
+///
+/// # Safety
+/// `request` must be an ioctl that takes no argument.
 unsafe fn ioctl_none(fd: RawFd, request: libc::c_ulong) -> std::io::Result<()> {
-    if libc::ioctl(fd, request as _) == 0 {
+    // SAFETY: the caller guarantees `request` carries no argument, so the
+    // kernel reads nothing from the variadic slot.
+    if unsafe { libc::ioctl(fd, request as _) } == 0 {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
@@ -275,7 +282,7 @@ fn probe_node(node: &PathBuf) -> Result<Drm, String> {
                     "another process holds DRM master (a compositor owns the display)".to_string(),
                 )
             }
-            Some(libc::EACCES) | Some(libc::EPERM) => {
+            Some(libc::EACCES | libc::EPERM) => {
                 return Err("cannot become DRM master (needs root or CAP_SYS_ADMIN)".to_string())
             }
             _ => return Err(format!("SET_MASTER: {e}")),
@@ -355,7 +362,10 @@ impl Drm {
             .ok_or_else(|| Error::Other("no CRTC is scanning out a framebuffer".into()))?;
         let fb = framebuffer_info(fd, scanout.fb_id)?;
         // Release the GEM reference however we exit from here.
-        let _guard = HandleGuard { fd, handle: fb.handle };
+        let _guard = HandleGuard {
+            fd,
+            handle: fb.handle,
+        };
 
         let len = fb
             .offset
@@ -374,7 +384,11 @@ impl Drm {
     fn map_buffer(&self, handle: u32, len: usize) -> Result<Mapping, Error> {
         let fd = self.file.as_raw_fd();
 
-        let mut prime = ffi::PrimeHandle { handle, flags: libc::O_RDONLY as u32, fd: -1 };
+        let mut prime = ffi::PrimeHandle {
+            handle,
+            flags: libc::O_RDONLY as u32,
+            fd: -1,
+        };
         if unsafe { ioctl(fd, ffi::PRIME_HANDLE_TO_FD, &mut prime) }.is_ok() && prime.fd >= 0 {
             let dmabuf = OwnedFd(prime.fd);
             if let Ok(m) = Mapping::new(dmabuf.0, 0, len) {
@@ -382,7 +396,11 @@ impl Drm {
             }
         }
 
-        let mut map = ffi::MapDumb { handle, pad: 0, offset: 0 };
+        let mut map = ffi::MapDumb {
+            handle,
+            pad: 0,
+            offset: 0,
+        };
         unsafe { ioctl(fd, ffi::MAP_DUMB, &mut map) }.map_err(|e| {
             Error::Other(format!(
                 "cannot map the scanout buffer: dma-buf mmap failed and MAP_DUMB returned {e} \
@@ -405,7 +423,7 @@ fn capture_writeback() {}
 fn card_nodes() -> Vec<PathBuf> {
     let mut nodes: Vec<PathBuf> = match std::fs::read_dir("/dev/dri") {
         Ok(entries) => entries
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| {
                 p.file_name()
@@ -422,7 +440,10 @@ fn card_nodes() -> Vec<PathBuf> {
 fn active_scanout(fd: RawFd) -> Result<Option<Scanout>, String> {
     let crtc_ids = crtc_ids(fd)?;
     for id in crtc_ids {
-        let mut crtc = ffi::Crtc { crtc_id: id, ..Default::default() };
+        let mut crtc = ffi::Crtc {
+            crtc_id: id,
+            ..Default::default()
+        };
         if unsafe { ioctl(fd, ffi::GETCRTC, &mut crtc) }.is_err() {
             continue;
         }
@@ -430,8 +451,8 @@ fn active_scanout(fd: RawFd) -> Result<Option<Scanout>, String> {
             return Ok(Some(Scanout {
                 crtc_id: id,
                 fb_id: crtc.fb_id,
-                width: crtc.mode.hdisplay as u32,
-                height: crtc.mode.vdisplay as u32,
+                width: u32::from(crtc.mode.hdisplay),
+                height: u32::from(crtc.mode.vdisplay),
             }));
         }
     }
@@ -441,8 +462,7 @@ fn active_scanout(fd: RawFd) -> Result<Option<Scanout>, String> {
 /// Two-pass: the first call reports counts, the second fills our buffers.
 fn crtc_ids(fd: RawFd) -> Result<Vec<u32>, String> {
     let mut res = ffi::CardRes::default();
-    unsafe { ioctl(fd, ffi::GETRESOURCES, &mut res) }
-        .map_err(|e| format!("GETRESOURCES: {e}"))?;
+    unsafe { ioctl(fd, ffi::GETRESOURCES, &mut res) }.map_err(|e| format!("GETRESOURCES: {e}"))?;
     if res.count_crtcs == 0 {
         return Ok(Vec::new());
     }
@@ -452,8 +472,7 @@ fn crtc_ids(fd: RawFd) -> Result<Vec<u32>, String> {
         count_crtcs: res.count_crtcs,
         ..Default::default()
     };
-    unsafe { ioctl(fd, ffi::GETRESOURCES, &mut res2) }
-        .map_err(|e| format!("GETRESOURCES: {e}"))?;
+    unsafe { ioctl(fd, ffi::GETRESOURCES, &mut res2) }.map_err(|e| format!("GETRESOURCES: {e}"))?;
     ids.truncate(res2.count_crtcs as usize);
     Ok(ids)
 }
@@ -475,7 +494,10 @@ fn find_writeback(fd: RawFd) -> Option<u32> {
     ids.into_iter().find(|&id| {
         // All counts left at zero: the kernel reports metadata without
         // needing us to allocate for modes, props or encoders.
-        let mut conn = ffi::GetConnector { connector_id: id, ..Default::default() };
+        let mut conn = ffi::GetConnector {
+            connector_id: id,
+            ..Default::default()
+        };
         unsafe { ioctl(fd, ffi::GETCONNECTOR, &mut conn) }.is_ok()
             && conn.connector_type == ffi::CONNECTOR_WRITEBACK
             && conn.connection == ffi::CONNECTED
@@ -486,7 +508,10 @@ fn find_writeback(fd: RawFd) -> Option<u32> {
 /// the fourcc and modifier) and falling back to GETFB for drivers that reject
 /// it. On success the caller owns the returned GEM handle.
 fn framebuffer_info(fd: RawFd, fb_id: u32) -> Result<FbInfo, Error> {
-    let mut fb2 = ffi::FbCmd2 { fb_id, ..Default::default() };
+    let mut fb2 = ffi::FbCmd2 {
+        fb_id,
+        ..Default::default()
+    };
     match unsafe { ioctl(fd, ffi::GETFB2, &mut fb2) } {
         Ok(()) if fb2.handles[0] != 0 => {
             return Ok(FbInfo {
@@ -523,9 +548,11 @@ fn framebuffer_info(fd: RawFd, fb_id: u32) -> Result<FbInfo, Error> {
         }
     }
 
-    let mut fb = ffi::FbCmd { fb_id, ..Default::default() };
-    unsafe { ioctl(fd, ffi::GETFB, &mut fb) }
-        .map_err(|e| Error::Other(format!("GETFB: {e}")))?;
+    let mut fb = ffi::FbCmd {
+        fb_id,
+        ..Default::default()
+    };
+    unsafe { ioctl(fd, ffi::GETFB, &mut fb) }.map_err(|e| Error::Other(format!("GETFB: {e}")))?;
     if fb.handle == 0 {
         return Err(Error::Unsupported(
             "kernel withheld the framebuffer handle (not DRM master, or no CAP_SYS_ADMIN)".into(),
@@ -539,7 +566,7 @@ fn framebuffer_info(fd: RawFd, fb_id: u32) -> Result<FbInfo, Error> {
         offset: 0,
         // GETFB predates fourccs; bpp/depth carry the conventional meaning.
         format: match (fb.bpp, fb.depth) {
-            (32, 24) | (32, 32) | (24, 24) => SourceFormat::Bgrx8888,
+            (32, 24 | 32) | (24, 24) => SourceFormat::Bgrx8888,
             (16, 16) => SourceFormat::Rgb565,
             (bpp, depth) => {
                 return Err(Error::Unsupported(format!(

@@ -15,7 +15,7 @@ struct Cli {
     #[arg(short, long)]
     interactive: bool,
 
-    /// Output file (default: screenshot_YYYYMMDD_HHMMSS.png)
+    /// Output file (default: `screenshot_YYYYMMDD_HHMMSS.png`)
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -56,9 +56,10 @@ fn run(cli: &Cli) -> Result<PathBuf, Error> {
     let backend = match &cli.backend {
         Some(name) => backend::detect_named(name).map_err(Error::Other)?,
         None => backend::detect().map_err(|declined| {
+            use std::fmt::Write as _;
             let mut msg = String::from("no capture backend applies to this system:");
             for (name, reason) in declined {
-                msg.push_str(&format!("\n  {name}: {reason}"));
+                let _ = write!(msg, "\n  {name}: {reason}");
             }
             Error::Other(msg)
         })?,
@@ -73,7 +74,9 @@ fn run(cli: &Cli) -> Result<PathBuf, Error> {
         )));
     }
 
-    let request = Request { interactive: cli.interactive };
+    let request = Request {
+        interactive: cli.interactive,
+    };
     let capture = backend.capture(&request)?;
 
     let dest = cli.output.clone().unwrap_or_else(backend::default_output);
