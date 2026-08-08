@@ -16,7 +16,27 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install toolchain components
+      run: rustup component add rustfmt clippy
+
+    # Cheap checks first, so a formatting slip does not wait on a build.
+    - name: Formatting
+      run: cargo fmt --all --check
+
+    # Lint levels come from [lints] in Cargo.toml; -D turns them into failures
+    # here without changing what a contributor sees locally.
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    # The embedded build drops the portal and with it the only dependency tree,
+    # leaving the syscall backends. Most of the unsafe code is only compiled in
+    # this configuration's cfg set, so linting the default one is not enough.
+    - name: Clippy (no portal)
+      run: cargo clippy --all-targets --no-default-features --features drm,fbdev -- -D warnings
+
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --all-features
+    - name: Build (no portal)
+      run: cargo build --verbose --no-default-features --features drm,fbdev
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --all-features
